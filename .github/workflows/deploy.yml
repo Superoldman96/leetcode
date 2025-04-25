@@ -22,55 +22,89 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+      # 1️⃣ Checkout main 分支代码到 ./main 目录
       - uses: actions/checkout@v4
+        with:
+          path: main
+
+      # 2️⃣ Checkout docs 分支到 ./mkdocs 目录
       - uses: actions/checkout@v4
         with:
           ref: docs
           path: mkdocs
-      - run: |
-          mv -f mkdocs/* .
-          mv solution/CONTEST_README.md docs/contest.md
-          mv solution/CONTEST_README_EN.md docs-en/contest.md
+
+      # 3️⃣ 移动竞赛专属 README 到 docs 结构中
+      - name: Move contest files
+        run: |
+          cp main/solution/CONTEST_README.md mkdocs/docs/contest.md
+          cp main/solution/CONTEST_README_EN.md mkdocs/docs-en/contest.md
+
+      # 4️⃣ 配置 Git 用户信息（后续 commit 缓存用）
       - name: Configure Git Credentials
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
 
+      # 5️⃣ 安装 Python
       - uses: actions/setup-python@v5
         with:
           python-version: 3.x
 
+      # 6️⃣ 设置缓存 Key（按周）
       - run: echo "cache_id=$(date --utc '+%V')" >> $GITHUB_ENV
 
+      # 7️⃣ 缓存 mkdocs-material 依赖缓存
       - uses: actions/cache@v4
         with:
           key: mkdocs-material-${{ env.cache_id }}
-          path: .cache
+          path: mkdocs/.cache
           restore-keys: |
             mkdocs-material-
-            
+
+      # 8️⃣ 安装依赖
       - name: Install dependencies
+        working-directory: mkdocs
         run: |
           python3 -m pip install --upgrade pip
           python3 -m pip install -r requirements.txt
           python3 -m pip install "mkdocs-material[imaging]"
           sudo apt-get install pngquant
-          
+
+      # 9️⃣ 设置 API token 环境变量
       - name: Set MKDOCS_API_KEYS environment variable
         run: echo "MKDOCS_API_KEYS=${{ secrets.MKDOCS_API_KEYS }}" >> $GITHUB_ENV
 
-      - run: |
+      # 🔟 执行构建（main.py 中访问的是 main/ 下的内容）
+      - name: Build site
+        working-directory: mkdocs
+        run: |
           python3 main.py
           mkdocs build -f mkdocs.yml
           mkdocs build -f mkdocs-en.yml
+          echo "leetcode.doocs.org" > ./site/CNAME
 
-      - name: Generate CNAME file
-        run: echo "leetcode.doocs.org" > ./site/CNAME
+      # 1️⃣1️⃣ 提交缓存（包括 path-map.json 和 page-authors.json）回 docs 分支
+      - name: Commit cache files back to docs branch
+        working-directory: mkdocs
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
+          git add .cache/path-map.json
+          git add .cache/plugin/git-committers/page-authors.json
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "chore: update committers and path map [bot]"
+            git push origin HEAD:docs
+          fi
+
+      # 1️⃣2️⃣ 上传站点构建产物
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: ./site
+          path: mkdocs/site
 
   deploy:
     needs: build
